@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Blob — Pink",
+  title: "Blob Kawaii",
   description: "Speaking blob + ElevenLabs voice agent",
 };
 
