@@ -10,3 +10,4 @@ node_modules
 .cursor/qa-loop/
 .playwright-mcp/
 output/
+.vercel
