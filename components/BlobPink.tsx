@@ -1,6 +1,7 @@
 "use client";
 
 import { Conversation } from "@elevenlabs/client";
+import { ConnectionState } from "livekit-client";
 import {
   useCallback,
   useEffect,
@@ -17,9 +18,29 @@ import { ConvaiHint } from "@/components/ConvaiHint";
 
 type LiveConversation = Awaited<ReturnType<typeof Conversation.startSession>>;
 
+/** Ensures LiveKit tears down even if WebRTCConnection.close() no-ops (e.g. isConnected false). */
+function forceDisconnectElevenLabsRoom(conversation: LiveConversation) {
+  try {
+    const room = (
+      conversation as unknown as {
+        connection?: {
+          room?: { state: ConnectionState; disconnect: (stopTracks?: boolean) => Promise<void> };
+        };
+      }
+    ).connection?.room;
+    if (room && room.state !== ConnectionState.Disconnected) {
+      void room.disconnect(true);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export type BlobPinkProps = {
   convai: ConvaiPublicConfig;
 };
+
+const BLOB_INTRO = "Hello! I'm a happy little blob.";
 
 function bootstrapUrl(): string {
   if (
@@ -46,22 +67,12 @@ export function BlobPink({ convai }: BlobPinkProps) {
   const mouthInnerRef = useRef<SVGEllipseElement>(null);
 
   const [status, setStatus] = useState("ready");
-  const [sayText, setSayText] = useState(
-    "Hello! I am a happy little blob."
-  );
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [voiceIndex, setVoiceIndex] = useState(0);
-  const [rate, setRate] = useState(1);
-  const [repeatAfterMe, setRepeatAfterMe] = useState(false);
-  const [repeatText, setRepeatText] = useState("");
-  const [listenLabel, setListenLabel] = useState("Listen");
   const [convLog, setConvLog] = useState("");
   const [convEndDisabled, setConvEndDisabled] = useState(true);
   const [convStartBusy, setConvStartBusy] = useState(false);
 
   const liveConvRef = useRef<LiveConversation | null>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const [speechRecognitionReady, setSpeechRecognitionReady] = useState(false);
+  const convLogEventIdsRef = useRef<Set<string>>(new Set());
 
   const setMouthIdle = useCallback(() => {
     mouthSmileRef.current?.setAttribute("visibility", "visible");
@@ -114,94 +125,21 @@ export function BlobPink({ convai }: BlobPinkProps) {
     return () => cancelAnimationFrame(frame);
   }, [setMouthIdle]);
 
-  useEffect(() => {
-    const synth = window.speechSynthesis;
-    function loadVoices() {
-      const v = synth.getVoices();
-      setVoices(v);
-      const prefer = v.findIndex((x) => /en-US|en-GB/i.test(x.lang));
-      if (prefer >= 0) setVoiceIndex(prefer);
-    }
-    loadVoices();
-    synth.onvoiceschanged = loadVoices;
-    return () => {
-      synth.onvoiceschanged = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const SR =
-      typeof window !== "undefined" &&
-      (window.SpeechRecognition ||
-        (
-          window as unknown as {
-            webkitSpeechRecognition?: new () => SpeechRecognition;
-          }
-        ).webkitSpeechRecognition);
-    if (!SR) return;
-    const recognition = new SR();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (e) => {
-      const heard = e.results[0][0].transcript;
-      setRepeatText(heard);
-      setStatus(`heard: "${heard}"`);
-      void speakRef.current?.(heard);
-    };
-    recognition.onerror = () => {
-      setStatus("mic error");
-      setListenLabel("Listen");
-    };
-    recognition.onend = () => setListenLabel("Listen");
-    recognitionRef.current = recognition;
-    setSpeechRecognitionReady(true);
-  }, []);
-
   const endElevenLabsSession = useCallback(async () => {
     const c = liveConvRef.current;
     liveConvRef.current = null;
+    convLogEventIdsRef.current.clear();
     if (!c) return;
     try {
       await c.endSession();
     } catch {
       /* ignore */
     }
+    forceDisconnectElevenLabsRoom(c);
     exitSpeak();
     setConvEndDisabled(true);
     setConvStartBusy(false);
   }, [exitSpeak]);
-
-  const speakRef = useRef<
-    ((text: string) => void | Promise<void>) | undefined
-  >(undefined);
-
-  const speak = useCallback(
-    async (text: string) => {
-      const t = text.trim();
-      if (!t) return;
-      await endElevenLabsSession();
-      window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(t);
-      utt.voice = voices[voiceIndex] ?? null;
-      utt.rate = rate;
-      utt.onstart = () => {
-        enterSpeak();
-        setStatus("speaking...");
-      };
-      utt.onend = () => {
-        exitSpeak();
-        setStatus("done");
-      };
-      utt.onerror = () => {
-        exitSpeak();
-        setStatus("error");
-      };
-      window.speechSynthesis.speak(utt);
-    },
-    [endElevenLabsSession, enterSpeak, exitSpeak, rate, voiceIndex, voices]
-  );
-
-  speakRef.current = speak;
 
   const appendConvLog = useCallback((line: string) => {
     setConvLog((prev) => {
@@ -231,13 +169,6 @@ export function BlobPink({ convai }: BlobPinkProps) {
       return;
     }
 
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setStatus("microphone access is required for voice chat");
-      return;
-    }
-
     setConvStartBusy(true);
     setStatus("connecting…");
 
@@ -246,6 +177,8 @@ export function BlobPink({ convai }: BlobPinkProps) {
       "environment" in ok && ok.environment
         ? { environment: ok.environment }
         : {};
+
+    convLogEventIdsRef.current.clear();
 
     const callbacks = {
       onConnect: (props: { conversationId: string }) => {
@@ -257,6 +190,7 @@ export function BlobPink({ convai }: BlobPinkProps) {
         );
       },
       onDisconnect: () => {
+        convLogEventIdsRef.current.clear();
         liveConvRef.current = null;
         exitSpeak();
         setConvEndDisabled(true);
@@ -280,10 +214,21 @@ export function BlobPink({ convai }: BlobPinkProps) {
         role?: string;
         source?: string;
         message?: string;
+        event_id?: number;
       }) => {
         let role = props.role;
         if (!role && props.source) {
-          role = props.source === "user" ? "user" : "agent";
+          role =
+            props.source === "user"
+              ? "user"
+              : props.source === "ai"
+                ? "agent"
+                : "agent";
+        }
+        if (typeof props.event_id === "number") {
+          const key = `${role ?? "?"}:${props.event_id}`;
+          if (convLogEventIdsRef.current.has(key)) return;
+          convLogEventIdsRef.current.add(key);
         }
         if (props.message) {
           appendConvLog(`${role || "?"}: ${props.message}`);
@@ -321,7 +266,12 @@ export function BlobPink({ convai }: BlobPinkProps) {
         session as Parameters<typeof Conversation.startSession>[0]
       );
     } catch (e) {
-      setStatus("could not start session — check .env and HTTPS");
+      const name = e instanceof Error ? e.name : "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        setStatus("microphone access is required for voice chat");
+      } else {
+        setStatus("could not start session — check .env and HTTPS");
+      }
       setConvStartBusy(false);
       console.error(e);
     }
@@ -331,22 +281,6 @@ export function BlobPink({ convai }: BlobPinkProps) {
     enterSpeak,
     exitSpeak,
   ]);
-
-  const onListen = () => {
-    const recognition = recognitionRef.current;
-    if (!recognition) return;
-    setListenLabel("Listening…");
-    setStatus("listening...");
-    try {
-      recognition.start();
-    } catch {
-      try {
-        recognition.stop();
-      } catch {
-        /* ignore */
-      }
-    }
-  };
 
   return (
     <div className="blob-root">
@@ -434,92 +368,7 @@ export function BlobPink({ convai }: BlobPinkProps) {
       <div className="blob-status">{status}</div>
 
       <div className="blob-controls">
-        <textarea
-          value={sayText}
-          onChange={(e) => setSayText(e.target.value)}
-          placeholder="Type something for the blob to say..."
-        />
-        <div className="blob-row">
-          <label htmlFor="voiceSel">Voice</label>
-          <select
-            id="voiceSel"
-            value={voiceIndex}
-            onChange={(e) => setVoiceIndex(Number(e.target.value))}
-            aria-label="Voice"
-          >
-            {voices.map((v, i) => (
-              <option key={`${v.name}-${v.lang}-${i}`} value={i}>
-                {v.name} ({v.lang})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="blob-row">
-          <label htmlFor="rate">Speed</label>
-          <input
-            id="rate"
-            type="range"
-            min={0.5}
-            max={2}
-            step={0.1}
-            value={rate}
-            onChange={(e) => setRate(Number(e.target.value))}
-          />
-          <span
-            style={{
-              fontSize: 13,
-              minWidth: 30,
-              color: "var(--muted)",
-            }}
-          >
-            {rate.toFixed(1)}×
-          </span>
-        </div>
-        <label className="blob-toggle">
-          <input
-            type="checkbox"
-            checked={repeatAfterMe}
-            onChange={(e) => setRepeatAfterMe(e.target.checked)}
-          />
-          <span>Repeat after me mode</span>
-        </label>
-        <div className={repeatAfterMe ? "" : "blob-hidden"}>
-          <textarea
-            value={repeatText}
-            onChange={(e) => setRepeatText(e.target.value)}
-            onBlur={() => {
-              if (repeatAfterMe && repeatText.trim()) void speak(repeatText.trim());
-            }}
-            placeholder="Paste or type what you said..."
-            style={{ height: 52, marginTop: 4 }}
-          />
-        </div>
-        <div className="blob-btn-row">
-          <button type="button" onClick={() => void speak(sayText)}>
-            Speak
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void endElevenLabsSession();
-              window.speechSynthesis.cancel();
-              exitSpeak();
-              setStatus("stopped");
-            }}
-          >
-            Stop
-          </button>
-        </div>
-        <div className={repeatAfterMe ? "" : "blob-hidden"}>
-          <button
-            type="button"
-            className="blob-listen-btn"
-            disabled={!speechRecognitionReady}
-            onClick={onListen}
-          >
-            {listenLabel}
-          </button>
-        </div>
+        <p className="blob-intro">{BLOB_INTRO}</p>
 
         <p className="blob-section-label">ElevenLabs · voice agent</p>
         <div className="blob-btn-row">

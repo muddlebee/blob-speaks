@@ -1,7 +1,7 @@
 import type { ConvaiPublicConfig } from "@/lib/convai-public-config";
 
 export function ConvaiHint({ convai }: { convai: ConvaiPublicConfig }) {
-  if (!convai.agentIdConfigured) {
+   if (!convai.agentIdConfigured) {
     return (
       <p className="blob-hint blob-hint-warn">
         Voice agent is not configured on the server. Add{" "}
@@ -13,13 +13,5 @@ export function ConvaiHint({ convai }: { convai: ConvaiPublicConfig }) {
     );
   }
 
-  return (
-    <p className="blob-hint">
-      Bootstrap: <code>{convai.bootstrapPath}</code>
-      {convai.apiKeyConfigured
-        ? " · Server mints session credentials (API key present)."
-        : " · Public agent mode (no server API key)."}
-      {convai.nodeEnv === "development" ? " · Running in development." : null}
-    </p>
-  );
+  return null;
 }
