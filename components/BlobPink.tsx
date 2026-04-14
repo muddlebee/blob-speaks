@@ -51,6 +51,24 @@ function transcriptLineKind(
   return "plain";
 }
 
+function statusPhase(
+  status: string
+): "ready" | "connecting" | "live" | "error" | "neutral" {
+  const t = status.trim().toLowerCase();
+  if (t === "ready") return "ready";
+  if (t.includes("connecting")) return "connecting";
+  if (t.includes("live")) return "live";
+  if (
+    t.startsWith("bootstrap:") ||
+    t.startsWith("agent:") ||
+    t.includes("microphone") ||
+    t.includes("could not start")
+  ) {
+    return "error";
+  }
+  return "neutral";
+}
+
 function bootstrapUrl(): string {
   if (
     typeof globalThis !== "undefined" &&
@@ -141,21 +159,27 @@ export function BlobPink({ convai }: BlobPinkProps) {
     el.scrollTop = el.scrollHeight;
   }, [convLog]);
 
-  const endElevenLabsSession = useCallback(async () => {
-    const c = liveConvRef.current;
-    liveConvRef.current = null;
-    convLogEventIdsRef.current.clear();
-    if (!c) return;
-    try {
-      await c.endSession();
-    } catch {
-      /* ignore */
-    }
-    forceDisconnectElevenLabsRoom(c);
-    exitSpeak();
-    setConvEndDisabled(true);
-    setConvStartBusy(false);
-  }, [exitSpeak]);
+  const endElevenLabsSession = useCallback(
+    async (opts?: { retainStartBusy?: boolean }) => {
+      const c = liveConvRef.current;
+      liveConvRef.current = null;
+      convLogEventIdsRef.current.clear();
+      if (!c) {
+        if (!opts?.retainStartBusy) setConvStartBusy(false);
+        return;
+      }
+      try {
+        await c.endSession();
+      } catch {
+        /* ignore */
+      }
+      forceDisconnectElevenLabsRoom(c);
+      exitSpeak();
+      setConvEndDisabled(true);
+      if (!opts?.retainStartBusy) setConvStartBusy(false);
+    },
+    [exitSpeak]
+  );
 
   const appendConvLog = useCallback((line: string) => {
     setConvLog((prev) => {
@@ -165,7 +189,11 @@ export function BlobPink({ convai }: BlobPinkProps) {
   }, []);
 
   const startVoiceChat = useCallback(async () => {
-    if (liveConvRef.current) await endElevenLabsSession();
+    setConvStartBusy(true);
+    setStatus("connecting…");
+    if (liveConvRef.current) {
+      await endElevenLabsSession({ retainStartBusy: true });
+    }
     window.speechSynthesis.cancel();
     exitSpeak();
 
@@ -182,11 +210,9 @@ export function BlobPink({ convai }: BlobPinkProps) {
       setStatus(
         "bootstrap: " + (e instanceof Error ? e.message : String(e))
       );
+      setConvStartBusy(false);
       return;
     }
-
-    setConvStartBusy(true);
-    setStatus("connecting…");
 
     const ok = cfg as ConvaiBootstrapOk;
     const envOpts =
@@ -383,7 +409,12 @@ export function BlobPink({ convai }: BlobPinkProps) {
         </div>
       </div>
 
-      <div className="blob-status">{status}</div>
+      <div
+        className={`blob-status blob-status--${statusPhase(status)}`}
+        aria-live="polite"
+      >
+        {status}
+      </div>
 
       <div className="blob-controls">
         <p className="blob-intro">{BLOB_INTRO}</p>
@@ -391,7 +422,7 @@ export function BlobPink({ convai }: BlobPinkProps) {
         <div className="blob-btn-row">
           <button
             type="button"
-            disabled={convStartBusy}
+            disabled={convStartBusy || !convEndDisabled}
             onClick={() => void startVoiceChat()}
           >
             Start
