@@ -40,7 +40,16 @@ export type BlobPinkProps = {
   convai: ConvaiPublicConfig;
 };
 
-const BLOB_INTRO = "Hello! I'm a happy little blob.";
+const BLOB_INTRO = "Press start, then speak.";
+
+function transcriptLineKind(
+  line: string
+): "user" | "agent" | "meta" | "plain" {
+  if (line.startsWith("user:")) return "user";
+  if (line.startsWith("agent:")) return "agent";
+  if (line.startsWith("—")) return "meta";
+  return "plain";
+}
 
 function bootstrapUrl(): string {
   if (
@@ -73,6 +82,7 @@ export function BlobPink({ convai }: BlobPinkProps) {
 
   const liveConvRef = useRef<LiveConversation | null>(null);
   const convLogEventIdsRef = useRef<Set<string>>(new Set());
+  const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
   const setMouthIdle = useCallback(() => {
     mouthSmileRef.current?.setAttribute("visibility", "visible");
@@ -124,6 +134,12 @@ export function BlobPink({ convai }: BlobPinkProps) {
     frame = requestAnimationFrame(mouthTick);
     return () => cancelAnimationFrame(frame);
   }, [setMouthIdle]);
+
+  useEffect(() => {
+    const el = transcriptScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [convLog]);
 
   const endElevenLabsSession = useCallback(async () => {
     const c = liveConvRef.current;
@@ -282,6 +298,8 @@ export function BlobPink({ convai }: BlobPinkProps) {
     exitSpeak,
   ]);
 
+  const showTranscript = convLog.length > 0 || !convEndDisabled;
+
   return (
     <div className="blob-root">
       <div className="blob-stage" aria-hidden>
@@ -370,14 +388,13 @@ export function BlobPink({ convai }: BlobPinkProps) {
       <div className="blob-controls">
         <p className="blob-intro">{BLOB_INTRO}</p>
 
-        <p className="blob-section-label">ElevenLabs · voice agent</p>
         <div className="blob-btn-row">
           <button
             type="button"
             disabled={convStartBusy}
             onClick={() => void startVoiceChat()}
           >
-            Start voice chat
+            Start
           </button>
           <button
             type="button"
@@ -385,15 +402,41 @@ export function BlobPink({ convai }: BlobPinkProps) {
             disabled={convEndDisabled}
             onClick={() => void endElevenLabsSession()}
           >
-            End chat
+            End
           </button>
         </div>
-        <textarea
-          className="blob-conv-log"
-          readOnly
-          value={convLog}
-          placeholder="Transcript…"
-        />
+        {showTranscript ? (
+          <section
+            className="blob-transcript"
+            aria-label="Conversation transcript"
+          >
+            <div className="blob-transcript-label">Transcript</div>
+            <div
+              ref={transcriptScrollRef}
+              className="blob-transcript-scroll"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions"
+            >
+              {convLog.trim() === "" && !convEndDisabled ? (
+                <p className="blob-transcript-empty">Waiting for messages…</p>
+              ) : (
+                convLog.split("\n").map((line, i) =>
+                  line === "" ? (
+                    <div key={i} className="blob-transcript-gap" aria-hidden />
+                  ) : (
+                    <div
+                      key={i}
+                      className={`blob-transcript-line blob-transcript-line--${transcriptLineKind(line)}`}
+                    >
+                      {line}
+                    </div>
+                  )
+                )
+              )}
+            </div>
+          </section>
+        ) : null}
         <ConvaiHint convai={convai} />
       </div>
     </div>
