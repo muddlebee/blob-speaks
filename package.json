@@ -1,0 +1,20 @@
+{
+  "name": "blob-speaks",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1"
+  },
+  "dependencies": {
+    "@elevenlabs/client": "^1.2.1",
+    "next": "^16.2.3",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.14.0",
+    "@types/react": "19.0.12",
+    "typescript": "5.8.2"
+  }
+}

@@ -1,0 +1,12 @@
+.env
+.next
+node_modules
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Local QA / automation artifacts (screenshots, traces)
+.cursor/qa-loop/
+.playwright-mcp/
+output/
